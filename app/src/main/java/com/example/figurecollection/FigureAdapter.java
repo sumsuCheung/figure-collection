@@ -14,40 +14,58 @@ import androidx.recyclerview.widget.RecyclerView;
 import java.io.File;
 import java.util.List;
 
-public class FigureAdapter extends RecyclerView.Adapter<FigureAdapter.VH> {
+public class FigureAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     public interface OnItemClick {
         void onClick(Figure figure);
     }
 
-    private final List<Figure> data;
+    private final List<Object> items;
     private final OnItemClick listener;
+    private static final int TYPE_HEADER = 0;
+    private static final int TYPE_ITEM = 1;
 
-    public FigureAdapter(List<Figure> data, OnItemClick listener) {
-        this.data = data;
+    public FigureAdapter(List<Object> items, OnItemClick listener) {
+        this.items = items;
         this.listener = listener;
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        return (items.get(position) instanceof String) ? TYPE_HEADER : TYPE_ITEM;
     }
 
     @NonNull
     @Override
-    public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_figure, parent, false);
-        return new VH(v);
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == TYPE_HEADER) {
+            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_header, parent, false);
+            return new HeaderVH(v);
+        } else {
+            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_figure, parent, false);
+            return new ItemVH(v);
+        }
     }
 
     @Override
-    public void onBindViewHolder(@NonNull VH holder, int position) {
-        Figure f = data.get(position);
-        holder.name.setText(f.name);
-        holder.size.setText(f.sizeText());
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+        if (holder instanceof HeaderVH) {
+            String title = (String) items.get(position);
+            ((HeaderVH) holder).tvHeader.setText(title);
+        } else if (holder instanceof ItemVH) {
+            Figure f = (Figure) items.get(position);
+            ItemVH itemHolder = (ItemVH) holder;
+            itemHolder.name.setText(f.name);
+            itemHolder.size.setText(f.sizeText());
 
-        if (f.photoPath != null && new File(f.photoPath).exists()) {
-            holder.image.setImageBitmap(decode(f.photoPath, 300));
-        } else {
-            holder.image.setImageResource(android.R.drawable.ic_menu_gallery);
+            if (f.photoPath != null && new File(f.photoPath).exists()) {
+                itemHolder.image.setImageBitmap(decode(f.photoPath, 300));
+            } else {
+                itemHolder.image.setImageResource(android.R.drawable.ic_menu_gallery);
+            }
+
+            itemHolder.itemView.setOnClickListener(v -> listener.onClick(f));
         }
-
-        holder.itemView.setOnClickListener(v -> listener.onClick(f));
     }
 
     private Bitmap decode(String path, int req) {
@@ -63,13 +81,21 @@ public class FigureAdapter extends RecyclerView.Adapter<FigureAdapter.VH> {
 
     @Override
     public int getItemCount() {
-        return data.size();
+        return items.size();
     }
 
-    static class VH extends RecyclerView.ViewHolder {
+    static class HeaderVH extends RecyclerView.ViewHolder {
+        TextView tvHeader;
+        HeaderVH(@NonNull View itemView) {
+            super(itemView);
+            tvHeader = itemView.findViewById(R.id.tvHeader);
+        }
+    }
+
+    static class ItemVH extends RecyclerView.ViewHolder {
         ImageView image;
         TextView name, size;
-        VH(@NonNull View itemView) {
+        ItemVH(@NonNull View itemView) {
             super(itemView);
             image = itemView.findViewById(R.id.itemImage);
             name = itemView.findViewById(R.id.itemName);
