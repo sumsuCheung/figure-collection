@@ -33,7 +33,10 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,7 +46,8 @@ public class MainActivity extends AppCompatActivity {
     private FigureAdapter adapter;
     private DBHelper dbHelper;
     private View emptyView;
-    private final List<Figure> figures = new ArrayList<>();
+    private final List<Object> displayItems = new ArrayList<>();
+    private List<Figure> allFigures = new ArrayList<>();
 
     private static final int REQ_PICK_IMAGE = 1001;
     private static final int REQ_TAKE_PHOTO = 1002;
@@ -60,23 +64,58 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         dbHelper = new DBHelper(this);
-
         recyclerView = findViewById(R.id.recyclerView);
         emptyView = findViewById(R.id.emptyView);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        adapter = new FigureAdapter(figures, figure -> showEditDialog(figure));
+        adapter = new FigureAdapter(displayItems, figure -> showEditDialog(figure));
         recyclerView.setAdapter(adapter);
 
         findViewById(R.id.fabAdd).setOnClickListener(v -> showEditDialog(null));
-
         loadFigures();
     }
 
     private void loadFigures() {
-        figures.clear();
-        figures.addAll(dbHelper.getAllFigures());
+        allFigures.clear();
+        allFigures.addAll(dbHelper.getAllFigures());
+
+        // 按系列分组
+        Map<String, List<Figure>> grouped = new HashMap<>();
+        for (Figure f : allFigures) {
+            String cat = f.getSizeCategory();
+            if (!grouped.containsKey(cat)) {
+                grouped.put(cat, new ArrayList<>());
+            }
+            grouped.get(cat).add(f);
+        }
+
+        // 提取分类并按数值排序
+        List<String> categories = new ArrayList<>(grouped.keySet());
+        Collections.sort(categories, (s1, s2) -> {
+            int n1 = extractNumber(s1);
+            int n2 = extractNumber(s2);
+            if (n1 == -1 && n2 == -1) return s1.compareTo(s2);
+            if (n1 == -1) return 1; // 未分类放最后
+            if (n2 == -1) return -1;
+            return Integer.compare(n1, n2);
+        });
+
+        // 重组为 混合列表（标题 + 手办）
+        displayItems.clear();
+        for (String cat : categories) {
+            displayItems.add(cat); // 添加标题
+            displayItems.addAll(grouped.get(cat)); // 添加该分类下的手办
+        }
+
         adapter.notifyDataSetChanged();
-        emptyView.setVisibility(figures.isEmpty() ? View.VISIBLE : View.GONE);
+        emptyView.setVisibility(allFigures.isEmpty() ? View.VISIBLE : View.GONE);
+    }
+
+    private int extractNumber(String s) {
+        Matcher m = Pattern.compile("\\d+").matcher(s);
+        if (m.find()) {
+            try { return Integer.parseInt(m.group()); } catch (Exception e) { }
+        }
+        return -1;
     }
 
     @Override
@@ -99,7 +138,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showStatistics() {
-        if (figures.isEmpty()) {
+        if (allFigures.isEmpty()) {
             new AlertDialog.Builder(this)
                     .setTitle("统计")
                     .setMessage("还没有手办数据哦～")
@@ -108,39 +147,39 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        int total = figures.size();
+        int total = allFigures.size();
         int withPhoto = 0;
-        int withAllSize = 0;
         double sumL = 0, sumW = 0, sumH = 0;
         int countL = 0, countW = 0, countH = 0;
+        Map<String, Integer> seriesMap = new HashMap<>();
 
-        for (Figure f : figures) {
+        for (Figure f : allFigures) {
             if (f.photoPath != null && new File(f.photoPath).exists()) withPhoto++;
 
             Double l = parseNumber(f.length);
             Double w = parseNumber(f.width);
             Double h = parseNumber(f.height);
-            if (l != null && w != null && h != null) withAllSize++;
             if (l != null) { sumL += l; countL++; }
             if (w != null) { sumW += w; countW++; }
             if (h != null) { sumH += h; countH++; }
+
+            String cat = f.getSizeCategory();
+            seriesMap.put(cat, seriesMap.getOrDefault(cat, 0) + 1);
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append("手办总数：").append(total).append(" 个\n");
-        sb.append("有照片：").append(withPhoto).append(" 个\n");
-        sb.append("尺寸齐全（长宽高都有）：").append(withAllSize).append(" 个\n\n");
+        sb.append("有照片：").append(withPhoto).append(" 个\n\n");
 
-        sb.append("—— 尺寸合计 ——\n");
+        sb.append("—— 系列统计 ——\n");
+        for (String key : seriesMap.keySet()) {
+            sb.append(key).append("：").append(seriesMap.get(key)).append(" 个\n");
+        }
+
+        sb.append("\n—— 尺寸合计 ——\n");
         sb.append("长：").append(countL == 0 ? "—" : fmt(sumL)).append("\n");
         sb.append("宽：").append(countW == 0 ? "—" : fmt(sumW)).append("\n");
         sb.append("高：").append(countH == 0 ? "—" : fmt(sumH)).append("\n");
-
-        if (countL > 0) sb.append("\n平均长：").append(fmt(sumL / countL)).append("\n");
-        if (countW > 0) sb.append("平均宽：").append(fmt(sumW / countW)).append("\n");
-        if (countH > 0) sb.append("平均高：").append(fmt(sumH / countH)).append("\n");
-
-        sb.append("\n注：仅对能识别出数字的尺寸进行统计。");
 
         new AlertDialog.Builder(this)
                 .setTitle("手办统计")
@@ -153,34 +192,24 @@ public class MainActivity extends AppCompatActivity {
         if (s == null) return null;
         Matcher m = Pattern.compile("-?\\d+(\\.\\d+)?").matcher(s);
         if (m.find()) {
-            try {
-                return Double.parseDouble(m.group());
-            } catch (Exception e) {
-                return null;
-            }
+            try { return Double.parseDouble(m.group()); } catch (Exception e) { return null; }
         }
         return null;
     }
 
     private String fmt(double d) {
-        if (Math.abs(d - Math.round(d)) < 0.001) {
-            return String.valueOf((long) Math.round(d));
-        }
+        if (Math.abs(d - Math.round(d)) < 0.001) return String.valueOf((long) Math.round(d));
         return String.format("%.2f", d);
     }
 
     private void exportAll() {
-        if (figures.isEmpty()) {
+        if (allFigures.isEmpty()) {
             Toast.makeText(this, "没有可导出的数据", Toast.LENGTH_SHORT).show();
             return;
         }
-
         try {
             File dir = new File(getCacheDir(), "export");
-            if (!dir.exists() && !dir.mkdirs()) {
-                Toast.makeText(this, "创建导出目录失败", Toast.LENGTH_SHORT).show();
-                return;
-            }
+            if (!dir.exists() && !dir.mkdirs()) return;
             File csv = new File(dir, "手办清单_" + System.currentTimeMillis() + ".csv");
 
             FileOutputStream fos = new FileOutputStream(csv);
@@ -189,29 +218,19 @@ public class MainActivity extends AppCompatActivity {
 
             writer.write("序号,名称,长,宽,高,照片路径\n");
             int i = 1;
-            for (Figure f : figures) {
-                writer.write(i++ + ",");
-                writer.write(escapeCsv(f.name) + ",");
-                writer.write(escapeCsv(f.length) + ",");
-                writer.write(escapeCsv(f.width) + ",");
-                writer.write(escapeCsv(f.height) + ",");
-                writer.write(escapeCsv(f.photoPath));
-                writer.write("\n");
+            for (Figure f : allFigures) {
+                writer.write(i++ + "," + escapeCsv(f.name) + "," + escapeCsv(f.length) + "," +
+                        escapeCsv(f.width) + "," + escapeCsv(f.height) + "," + escapeCsv(f.photoPath) + "\n");
             }
-            writer.flush();
-            writer.close();
-            fos.close();
+            writer.flush(); writer.close(); fos.close();
 
-            Uri uri = FileProvider.getUriForFile(this,
-                    getPackageName() + ".fileprovider", csv);
-
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", csv);
             Intent share = new Intent(Intent.ACTION_SEND);
             share.setType("text/csv");
             share.putExtra(Intent.EXTRA_STREAM, uri);
             share.putExtra(Intent.EXTRA_SUBJECT, "手办清单");
-            share.putExtra(Intent.EXTRA_TEXT, "共 " + figures.size() + " 个手办");
+            share.putExtra(Intent.EXTRA_TEXT, "共 " + allFigures.size() + " 个手办");
             share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-
             startActivity(Intent.createChooser(share, "导出到"));
         } catch (Exception e) {
             Toast.makeText(this, "导出失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -268,11 +287,8 @@ public class MainActivity extends AppCompatActivity {
             String w = etWidth.getText().toString().trim();
             String h = etHeight.getText().toString().trim();
 
-            if (editingFigure == null) {
-                dbHelper.insertFigure(name, pendingPhotoPath, l, w, h);
-            } else {
-                dbHelper.updateFigure(editingFigure.id, name, pendingPhotoPath, l, w, h);
-            }
+            if (editingFigure == null) dbHelper.insertFigure(name, pendingPhotoPath, l, w, h);
+            else dbHelper.updateFigure(editingFigure.id, name, pendingPhotoPath, l, w, h);
             dialog.dismiss();
             loadFigures();
         });
@@ -302,10 +318,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void takePhoto() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.CAMERA}, REQ_CAMERA_PERM);
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, REQ_CAMERA_PERM);
             return;
         }
         launchCamera();
@@ -314,14 +328,9 @@ public class MainActivity extends AppCompatActivity {
     private void launchCamera() {
         try {
             File dir = new File(getCacheDir(), "images");
-            if (!dir.exists() && !dir.mkdirs()) {
-                Toast.makeText(this, "无法创建缓存目录", Toast.LENGTH_SHORT).show();
-                return;
-            }
+            if (!dir.exists() && !dir.mkdirs()) return;
             cameraTempFile = new File(dir, "camera_" + System.currentTimeMillis() + ".jpg");
-            Uri uri = FileProvider.getUriForFile(this,
-                    getPackageName() + ".fileprovider", cameraTempFile);
-
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", cameraTempFile);
             Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
             intent.putExtra(MediaStore.EXTRA_OUTPUT, uri);
             intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -338,10 +347,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (requestCode == REQ_PICK_IMAGE && data != null && data.getData() != null) {
                 String saved = saveImageToInternal(data.getData());
-                if (saved != null) {
-                    pendingPhotoPath = saved;
-                    showPhoto(saved);
-                }
+                if (saved != null) { pendingPhotoPath = saved; showPhoto(saved); }
             } else if (requestCode == REQ_TAKE_PHOTO) {
                 if (cameraTempFile != null && cameraTempFile.exists()) {
                     File destDir = new File(getFilesDir(), "figures");
@@ -359,15 +365,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_CAMERA_PERM) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                launchCamera();
-            } else {
-                Toast.makeText(this, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show();
-            }
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) launchCamera();
+            else Toast.makeText(this, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -382,13 +384,9 @@ public class MainActivity extends AppCompatActivity {
             byte[] buf = new byte[8192];
             int len;
             while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
-            in.close();
-            out.close();
+            in.close(); out.close();
             return dest.getAbsolutePath();
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        }
+        } catch (Exception e) { e.printStackTrace(); return null; }
     }
 
     private void copyFile(File src, File dst) throws Exception {
@@ -397,8 +395,7 @@ public class MainActivity extends AppCompatActivity {
         byte[] buf = new byte[8192];
         int len;
         while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
-        in.close();
-        out.close();
+        in.close(); out.close();
     }
 
     private void showPhoto(String path) {
@@ -415,9 +412,7 @@ public class MainActivity extends AppCompatActivity {
         opts.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(path, opts);
         int scale = 1;
-        while (opts.outWidth / scale > reqSize || opts.outHeight / scale > reqSize) {
-            scale *= 2;
-        }
+        while (opts.outWidth / scale > reqSize || opts.outHeight / scale > reqSize) scale *= 2;
         BitmapFactory.Options opts2 = new BitmapFactory.Options();
         opts2.inSampleSize = scale;
         return BitmapFactory.decodeFile(path, opts2);
